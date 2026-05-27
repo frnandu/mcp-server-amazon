@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio'
 import fs from 'fs'
-import { USE_MOCKS, EXPORT_LIVE_SCRAPING_FOR_MOCKS, getAmazonDomain } from './config.js'
-import { createBrowserAndPage, getTimestamp, throwIfNotLoggedIn } from './utils.js'
+import { USE_MOCKS, EXPORT_LIVE_SCRAPING_FOR_MOCKS } from './config.js'
+import { createBrowserAndPage, ensureLoggedIn, getAmazonDomain, getTimestamp } from './utils.js'
 
 const __dirname = new URL('.', import.meta.url).pathname
 
@@ -27,6 +27,36 @@ interface CartContent {
   totalItems?: number
 }
 
+function normalizeText(value: string) {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function extractFirstText($item: cheerio.Cheerio<any>, selectors: string[]) {
+  for (const selector of selectors) {
+    const text = $item.find(selector).first().text().trim()
+    if (text) {
+      return text
+    }
+  }
+
+  return ''
+}
+
+export function isAddToCartConfirmationText(text: string) {
+  const normalized = normalizeText(text)
+  return (
+    normalized.includes('added to cart') ||
+    normalized.includes('added to basket') ||
+    normalized.includes('dodano do koszyka') ||
+    normalized.includes('dodal do koszyka')
+  )
+}
+
 // ##################################
 // Get Cart Content
 // ##################################
@@ -48,8 +78,7 @@ export async function getCartContent(): Promise<CartContent> {
       // Navigate to the cart page
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 })
 
-      // Handle login if needed
-      await throwIfNotLoggedIn(page)
+      await ensureLoggedIn(page)
 
       // Wait for the cart content to load
       try {
@@ -78,12 +107,19 @@ export async function getCartContent(): Promise<CartContent> {
   return extractCartPageData($)
 }
 
-function extractCartPageData($: cheerio.CheerioAPI): CartContent {
+export function extractCartPageData($: cheerio.CheerioAPI): CartContent {
   const $cartContainer = $('#sc-active-cart')
+  const normalizedCartText = normalizeText($cartContainer.text())
+  const totalItemsAttr = parseInt($cartContainer.attr('data-cart-total-item-count') || '', 10)
 
   // Check if cart is empty
-  const emptyCartText = $cartContainer.text()
-  if (emptyCartText.includes('Your Amazon Cart is empty')) {
+  if (
+    $('#sc-empty-cart').length > 0 ||
+    normalizedCartText.includes('your amazon cart is empty') ||
+    normalizedCartText.includes('twoj koszyk amazon jest pusty') ||
+    normalizedCartText.includes('twój koszyk amazon jest pusty') ||
+    totalItemsAttr === 0
+  ) {
     return {
       isEmpty: true,
       items: [],
@@ -96,10 +132,20 @@ function extractCartPageData($: cheerio.CheerioAPI): CartContent {
     const $item = $(element)
 
     // Extract basic item information
-    const titleElement = $item.find('a.sc-product-title').first()
-    const title = titleElement.find('.a-truncate-full').text().trim()
-    const price = $item.find('.apex-price-to-pay-value .a-offscreen').text().trim()
-    const quantityElement = $item.find('[data-a-selector="value"]').text().trim()
+    const title = extractFirstText($item, [
+      'a.sc-product-title .a-truncate-full',
+      'a.sc-product-title .a-truncate-cut',
+      '.sc-grid-item-product-title .a-truncate-full',
+      '.sc-grid-item-product-title .a-truncate-cut',
+      'a.sc-product-title',
+    ])
+    const price = extractFirstText($item, [
+      '.apex-price-to-pay-value .a-offscreen',
+      '.sc-apex-cart-price .a-offscreen',
+      '.sc-product-price .a-offscreen',
+      '.a-price .a-offscreen',
+    ])
+    const quantityElement = extractFirstText($item, ['[data-a-selector="value"]', '.a-dropdown-prompt'])
     const quantity = parseInt(quantityElement) || 1
 
     // Extract optional information
@@ -110,8 +156,8 @@ function extractCartPageData($: cheerio.CheerioAPI): CartContent {
     const isSelected = $item.find('input[type="checkbox"]').is(':checked')
 
     console.error(`[INFO][get-cart-content] Extracted ASIN: ${asin}, Price: ${price}, Quantity: ${quantity}, item: ${title}`)
-    // Only add items with valid titles and prices
-    if (title && price) {
+    // Keep the item if the title was parsed; price may be unavailable for some DOM variants.
+    if (title) {
       items.push({
         title,
         price,
@@ -128,11 +174,12 @@ function extractCartPageData($: cheerio.CheerioAPI): CartContent {
   // Extract subtotal information
   const subtotal =
     $cartContainer.find('#sc-subtotal-amount-activecart .sc-price').text().trim() ||
-    $cartContainer.find('.sc-subtotal .sc-price').text().trim()
+    $cartContainer.find('.sc-subtotal .sc-price').text().trim() ||
+    $cartContainer.find('[data-name="Subtotals"] .sc-price').text().trim()
 
   const totalItemsText = $cartContainer.find('#sc-subtotal-label-activecart').text().trim()
-  const totalItemsMatch = totalItemsText.match(/\((\d+)\s+item/)
-  const totalItems = totalItemsMatch ? parseInt(totalItemsMatch[1]) : items.length
+  const totalItemsMatch = totalItemsText.match(/\((\d+)\s+(?:item|items|produkt|produkty|produktow|produktów)/i)
+  const totalItems = totalItemsMatch ? parseInt(totalItemsMatch[1]) : Number.isFinite(totalItemsAttr) ? totalItemsAttr : items.length
 
   return {
     isEmpty: false,
@@ -161,8 +208,7 @@ export async function addToCart(asin: string): Promise<{ success: boolean; messa
     // Navigate to the product page
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 })
 
-    // Handle login if needed
-    await throwIfNotLoggedIn(page)
+    await ensureLoggedIn(page)
 
     // Wait for the page to load completely
     await page.waitForSelector('body', { timeout: 10000 })
@@ -208,7 +254,7 @@ export async function addToCart(asin: string): Promise<{ success: boolean; messa
       // Check for success message
       const confirmationText = await page.$eval('#sw-atc-confirmation', el => el.textContent || '')
 
-      if (!confirmationText.includes('Added to cart') && !confirmationText.includes('Added to basket')) {
+      if (!isAddToCartConfirmationText(confirmationText)) {
         throw new Error(`Unexpected confirmation message: ${confirmationText}`)
       }
 
@@ -240,8 +286,7 @@ export async function clearCart() {
     // Navigate to the cart page
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 })
 
-    // Handle login if needed
-    await throwIfNotLoggedIn(page)
+    await ensureLoggedIn(page)
 
     // Wait for the cart to load
     await page.waitForSelector('#sc-active-cart, .sc-cart-item, .sc-empty-cart-banner', { timeout: 10000 })

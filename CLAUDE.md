@@ -37,10 +37,10 @@ npm run clean
 
 ### Authentication
 
-The server requires Amazon cookies for authentication:
-1. Export cookies from browser using a cookie export extension
-2. Save to `amazonCookies.json` in project root
-3. Format: Array of cookie objects with standard properties
+The server supports two authentication modes:
+1. Preferred: configure `AMAZON_EMAIL` and `AMAZON_PASSWORD` in the MCP server config so cookies can be generated automatically
+2. Fallback: export cookies from a browser and save them to `amazonCookies.json` in project root
+3. Optional: set `AMAZON_DOMAIN` such as `amazon.pl`
 
 ## Important Implementation Details
 
@@ -71,7 +71,10 @@ The server requires Amazon cookies for authentication:
 4. `get-cart-content`: View current cart
 5. `add-to-cart`: Add items to cart
 6. `clear-cart`: Remove all items from cart
-7. `perform-purchase`: Complete purchase (mock mode only)
+7. `perform-purchase`: Start a real checkout and stop at the BLIK code step
+8. `submit-blik-code`: Submit the external 6-digit BLIK code
+9. `confirm-purchase-paid`: Verify the order is visible in Amazon history
+10. `generate-amazon-cookies`: Force a fresh login and persist cookies
 
 ## Testing Approach
 
@@ -82,6 +85,6 @@ No formal test suite exists. Testing is done through:
 
 ## Common Issues
 
-1. **Authentication failures**: Update cookies from browser
+1. **Authentication failures**: Check MCP config credentials or regenerate cookies with `generate-amazon-cookies`
 2. **Scraping failures**: Amazon HTML structure may have changed
 3. **Rate limiting**: Add delays between requests if needed

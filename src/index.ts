@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getOrdersHistory } from './orders.js'
 import { getCartContent, addToCart, clearCart } from './cart.js'
 import { getProductDetails, searchProducts } from './products.js'
+import { confirmPurchasePaid, generateAmazonCookiesFromConfig, performPurchase, submitBlikCode } from './purchase.js'
 
 // Create server instance
 const server = new McpServer({
@@ -99,7 +100,7 @@ server.tool(
       .length(10, { message: 'ASIN must be a 10-character string.' })
       .describe('The ASIN (Amazon Standard Identification Number) of the product to add to cart. Must be a 10-character string.'),
   },
-  async ({ asin }) => {
+  async ({ asin }: { asin: string }) => {
     let result: Awaited<ReturnType<typeof addToCart>>
     try {
       result = await addToCart(asin)
@@ -161,7 +162,7 @@ server.tool(
       .length(10, { message: 'ASIN must be a 10-character string.' })
       .describe('The ASIN (Amazon Standard Identification Number) of the product to get details for. Must be a 10-character string.'),
   },
-  async ({ asin }) => {
+  async ({ asin }: { asin: string }) => {
     let result: Awaited<ReturnType<typeof getProductDetails>>
     try {
       result = await getProductDetails(asin)
@@ -209,7 +210,7 @@ server.tool(
       .min(1, { message: 'Search term cannot be empty.' })
       .describe('The search term to look for products on Amazon. For example: "collagen", "laptop", "books"'),
   },
-  async ({ searchTerm }) => {
+  async ({ searchTerm }: { searchTerm: string }) => {
     let result: Awaited<ReturnType<typeof searchProducts>>
     try {
       result = await searchProducts(searchTerm)
@@ -256,12 +257,121 @@ server.tool(
     'You should always ask for confirmation to the user before running this tool',
   {},
   async ({}) => {
-    // Mock the purchase confirmation for demonstration purposes
+    let result: Awaited<ReturnType<typeof performPurchase>>
+    try {
+      result = await performPurchase()
+    } catch (error: any) {
+      console.error('[ERROR][perform-purchase] Error in perform-purchase tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while starting the purchase. Error: ${error.message}`,
+          },
+        ],
+      }
+    }
+
     return {
       content: [
         {
           type: 'text',
-          text: '✅ Purchase confirmed! You can now consult your orders history to see the details of your latest purchase.',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    }
+  }
+)
+
+server.tool(
+  'submit-blik-code',
+  'Submit the 6-digit BLIK code for the pending Amazon checkout and finish the purchase.',
+  {
+    blikCode: z.string().regex(/^\d{6}$/, { message: 'BLIK code must be exactly 6 digits.' }),
+  },
+  async ({ blikCode }: { blikCode: string }) => {
+    let result: Awaited<ReturnType<typeof submitBlikCode>>
+    try {
+      result = await submitBlikCode(blikCode)
+    } catch (error: any) {
+      console.error('[ERROR][submit-blik-code] Error in submit-blik-code tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while submitting the BLIK code. Error: ${error.message}`,
+          },
+        ],
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    }
+  }
+)
+
+server.tool(
+  'confirm-purchase-paid',
+  'Confirm that the last pending Amazon purchase is visible in orders and therefore registered as paid.',
+  {},
+  async ({}) => {
+    let result: Awaited<ReturnType<typeof confirmPurchasePaid>>
+    try {
+      result = await confirmPurchasePaid()
+    } catch (error: any) {
+      console.error('[ERROR][confirm-purchase-paid] Error in confirm-purchase-paid tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while confirming the purchase payment. Error: ${error.message}`,
+          },
+        ],
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    }
+  }
+)
+
+server.tool(
+  'generate-amazon-cookies',
+  'Log in to Amazon with credentials from MCP config or environment variables and store fresh cookies for later requests.',
+  {},
+  async ({}) => {
+    let result: Awaited<ReturnType<typeof generateAmazonCookiesFromConfig>>
+    try {
+      result = await generateAmazonCookiesFromConfig()
+    } catch (error: any) {
+      console.error('[ERROR][generate-amazon-cookies] Error in generate-amazon-cookies tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while generating Amazon cookies. Error: ${error.message}`,
+          },
+        ],
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
         },
       ],
     }
