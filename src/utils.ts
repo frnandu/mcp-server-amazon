@@ -1,6 +1,6 @@
 import fs from 'fs'
 import puppeteer from 'puppeteer'
-import { COOKIES_FILE_PATH, IS_BROWSER_VISIBLE, MCP_CONFIG_PATHS } from './config.js'
+import { COOKIES_FILE_PATH, MCP_CONFIG_PATHS } from './config.js'
 
 export interface AmazonCookie {
   domain: string
@@ -195,7 +195,7 @@ export function getConfiguredAmazonCredentialsOrThrow(): AmazonCredentials {
 
 export async function createBrowserAndPage(): Promise<{ browser: puppeteer.Browser; page: puppeteer.Page }> {
   const browser = await puppeteer.launch({
-    headless: !IS_BROWSER_VISIBLE,
+    headless: true,
     devtools: false,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security', '--disable-blink-features=AutomationControlled'],
     ignoreDefaultArgs: ['--enable-automation'],
