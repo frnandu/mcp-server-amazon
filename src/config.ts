@@ -1,6 +1,6 @@
 const __dirname = new URL('.', import.meta.url).pathname
 
-export const IS_BROWSER_VISIBLE = false
+export const IS_BROWSER_VISIBLE = true
 
 /** Use local mock files instead of live scraping */
 export const USE_MOCKS = false

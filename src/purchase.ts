@@ -104,10 +104,21 @@ async function waitForPotentialNavigation(page: puppeteer.Page, timeout = 20000)
   ])
 }
 
+async function debugShot(page: puppeteer.Page, name: string) {
+  try {
+    const path = `/tmp/amazon-checkout-${name}.png` as `${string}.png`
+    await page.screenshot({ path, fullPage: false })
+    console.error(`[DEBUG][purchase] Screenshot: ${path} url=${page.url()}`)
+  } catch (e) {
+    console.error(`[DEBUG][purchase] Screenshot failed for ${name}:`, e)
+  }
+}
+
 async function openCheckoutFromCart(page: puppeteer.Page) {
   const domain = getAmazonDomain()
   const cartUrl = `https://www.${domain}/-/en/gp/cart/view.html?ref_=nav_cart`
   await page.goto(cartUrl, { waitUntil: 'networkidle2', timeout: 30000 })
+  await debugShot(page, '1-cart')
   await ensureLoggedIn(page)
   await page.waitForSelector('body', { timeout: 10000 })
 
@@ -121,12 +132,42 @@ async function openCheckoutFromCart(page: puppeteer.Page) {
   if (!selector) {
     const clickedText = await clickByVisibleText(page, ['Proceed to checkout', 'Continue to checkout', 'Checkout', 'Przejdź do kasy', 'Do kasy', 'Przejdz do kasy'])
     if (!clickedText) {
+      await debugShot(page, '1-cart-no-button')
       throw new Error('Could not find the checkout button in the cart.')
     }
   }
 
   await waitForPotentialNavigation(page)
+  await debugShot(page, '2-after-checkout-click')
   await ensureLoggedIn(page)
+  await debugShot(page, '3-after-ensure-login')
+}
+
+async function handleBillingAddressIfRequired(page: puppeteer.Page) {
+  // If BLIK shows "Adres do rozliczeń jest wymagany" click Aktualizuj to open billing address form
+  const bodyText = await getBodyText(page)
+  if (!/adres do rozlicze|billing address.*required/i.test(bodyText)) {
+    return false
+  }
+
+  console.error('[INFO][purchase] Billing address required — clicking Aktualizuj')
+  const clicked = await clickFirstVisible(page, ['a[href*="billing"]']) ||
+    await clickByVisibleText(page, ['Aktualizuj', 'Update', 'Dodaj adres', 'Add address'])
+  if (!clicked) return false
+
+  await waitForPotentialNavigation(page)
+  await debugShot(page, 'billing-address-form')
+
+  // Confirm/save the billing address form (address may already be pre-filled)
+  const saved = await clickFirstVisible(page, [
+    'input[name="address-ui-widgets-form-submit-button"]',
+    'input[type="submit"]',
+    'button[type="submit"]',
+  ]) || await clickByVisibleText(page, ['Użyj tego adresu', 'Use this address', 'Zapisz', 'Save', 'Kontynuuj'])
+  if (saved) await waitForPotentialNavigation(page)
+
+  await debugShot(page, 'billing-address-after-save')
+  return true
 }
 
 async function continuePastAddressOrSummary(page: puppeteer.Page) {
@@ -161,7 +202,8 @@ async function continuePastAddressOrSummary(page: puppeteer.Page) {
       'Next',
       'Dostarcz na ten adres',
       'Użyj tego adresu',
-      'Kontynuuj',
+      // NOTE: 'Kontynuuj' intentionally omitted — on combined Prime+payment pages it is
+      // disabled (billing address required) and clicking it navigates away unexpectedly.
       'Dalej',
     ])
     if (!clickedText) {
@@ -400,8 +442,15 @@ export async function performPurchase() {
 
   try {
     await openCheckoutFromCart(page)
+    await debugShot(page, '4-before-prime-decline')
+    await continuePastPrimeOffer(page)
+    await debugShot(page, '5-after-prime-decline')
+    await handleBillingAddressIfRequired(page)
+    await debugShot(page, '6-after-billing-address')
     await continuePastAddressOrSummary(page)
+    await debugShot(page, '7-after-address')
     await selectBlikPaymentMethod(page)
+    await debugShot(page, '8-after-blik-select')
     const blikInputSelector = await waitForBlikCodeInput(page)
     await persistBrowserCookies(browser)
 
@@ -455,7 +504,8 @@ export async function submitBlikCode(blikCode: string) {
       'input[name*="submit" i]',
       'input[name*="continue" i]',
       'button[type="submit"]',
-    ])) || (await clickByVisibleText(page, ['Place your order', 'Use this payment method', 'Continue', 'Confirm']))
+      'button[name*="continue" i]',
+    ])) || (await clickByVisibleText(page, ['Place your order', 'Use this payment method', 'Continue', 'Confirm', 'Kontynuuj', 'Zatwierdź', 'Zapłać']))
 
   if (!clickedSelector) {
     throw new Error('The BLIK code was entered, but the checkout confirmation button could not be found.')
